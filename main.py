@@ -1,5 +1,3 @@
-from typing import TextIO
-
 import pygame
 from PyQt6.QtWidgets import QApplication, QPushButton, QCheckBox,  QMainWindow, QFileDialog, QMenu
 from PyQt6 import uic
