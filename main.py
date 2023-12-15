@@ -1,5 +1,5 @@
 import pygame
-from PyQt6.QtWidgets import QApplication, QPushButton, QCheckBox,  QMainWindow, QFileDialog, QMenu
+from PyQt6.QtWidgets import QApplication, QPushButton, QCheckBox,  QMainWindow, QFileDialog, QMenu, QColorDialog
 from PyQt6 import uic
 from PyQt6.QtGui import QCursor, QFont, QIcon
 from pathlib import Path
@@ -16,10 +16,16 @@ import urllib
 from moviepy.editor import AudioFileClip
 import sys
 import os
+import re
 import images
 
-original_stdout = sys.stdout
-original_stderr = sys.stderr
+pattern = re.compile(r'[\\/:"*?<>|]')
+
+
+def clean(string):
+    return (string.replace("/", "-").replace(":", "-").replace("?", "").replace("<", "").replace(">", "")
+                  .replace("\\","-").replace("*","").replace('''"''',"").replace("|","-"))
+
 
 if sys.stdout is None or sys.stderr is None:
     output = open(os.devnull, "w")
@@ -29,8 +35,6 @@ if sys.stdout is None or sys.stderr is None:
 executable_path = os.path.dirname(os.path.abspath(__file__))
 ui_path1 = os.path.join(executable_path,"images")
 ui_path = os.path.join(ui_path1, "arialoom.ui")
-print(ui_path)
-
 
 directory_path = Path.home() / "Arialoom"
 directory_path.mkdir(parents=True, exist_ok=True)
@@ -87,6 +91,7 @@ class MainWindow(QMainWindow):
         self.volume_flag = False
         self.is_muted = False
         self.pressing = False
+        self.back_flag = False
         self.mode_flag = 0  # Modes(nothing, repeat-one, repeat-all, random)
 
         self.unmuted_volume = 1
@@ -115,9 +120,12 @@ class MainWindow(QMainWindow):
         self.downloadFeedback.hide()
         self.warningLabel_rename.hide()
         self.warningLabel_rename_2.hide()
+        self.warningLabel_3.hide()
         self.askPlaylist.hide()
         self.skip.hide()
+        self.back.hide()
         self.youTubePlaylist.hide()
+        self.ytbName.hide()
 
         self.horizontalSlider.sliderPressed.connect(self.slider_hold)  # Horizontal Slider is the main music slider
         self.horizontalSlider.sliderReleased.connect(self.slider_release)
@@ -134,13 +142,16 @@ class MainWindow(QMainWindow):
         self.cancelButton_3.clicked.connect(self.youtube_download_cancel_playlist)
         self.downloadButton.clicked.connect(self.youtube_download_preaction)
         self.onlyButton.clicked.connect(self.youtube_download_preaction_playlist_only)
-        self.alsoButton.clicked.connect(self.youtube_download_preaction_playlist_also)
+        self.alsoButton.clicked.connect(self.youtube_download_playlist_also_ask_name_handler)
+        self.applyButton_ytbName.clicked.connect(self.youtube_download_playlist_also_ask_name_apply)
+        self.cancelButton_ytbName.clicked.connect(self.youtube_download_playlist_also_ask_name_cancel)
         self.customSignal_2.textChanged.connect(self.youtube_download_done)
         self.cancelButton_rename.clicked.connect(self.rename_cancel)
         self.applyButton_rename.clicked.connect(self.rename_apply)
         self.cancelButton_rename_2.clicked.connect(self.rename_playlist_cancel)
         self.applyButton_rename_2.clicked.connect(self.rename_playlist_apply)
         self.skip.clicked.connect(self.skip_do)
+        self.back.clicked.connect(self.back_do)
         self.closeButton.clicked.connect(self.close)
         self.minimizeButton.clicked.connect(self.showMinimized)
         self.maximizeButton.clicked.connect(self.maximize)
@@ -197,6 +208,28 @@ class MainWindow(QMainWindow):
             """
         )
         self.skip.setStyleSheet("border-image: url(:/images/skip.png)")
+        self.back.setStyleSheet("border-image: url(:/images/back.png)")
+        try:
+            with open(f"{directory_path}\\color_choice.txt","r") as file:
+                color = file.read()
+        except FileNotFoundError:
+            color = "#df0000"
+        self.musicSlide.setStyleSheet(f"background-color:{color}")
+        self.musicSlide.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.musicSlide.customContextMenuRequested.connect(self.slider_menu_handler)
+
+    def slider_menu_handler(self):
+        context_menu = QMenu(self)
+        context_menu.addAction("Change color", self.color_changer_handler)
+        context_menu.exec(QCursor.pos())
+
+    def color_changer_handler(self):
+        color_picker = QColorDialog(self)
+        chosen_color = color_picker.getColor().name()
+        self.musicSlide.setStyleSheet(f"background-color:{chosen_color}")
+        with open(f"{directory_path}\\color_choice.txt","a") as file:
+            file.truncate(0)
+            file.write(chosen_color)
 
     def resizeEvent(self, a0):
         if self.isMaximized():
@@ -245,27 +278,40 @@ class MainWindow(QMainWindow):
     def skip_do(self):  # Skip button
         self.mode_apply()
 
+    def back_do(self):  # Back button
+        self.back_flag = True
+        self.mode_apply()
+        self.back_flag = False
+
     def rename_playlist_cancel(self):
         self.renameBox_2.hide()
 
     def rename_playlist_apply(self):
-        new_name = self.newName_2.text()
+        playlist_list = [file.name for file in directory_path.glob("*/") if file.is_dir()]
+        new_name = clean(self.newName_2.text())
         if new_name == "" or new_name.isspace():
+            self.warninglabel_rename_2.setText("Invalid Name!")
+            self.warningLabel_rename_2.show()
+        elif new_name in playlist_list:
+            self.warninglabel_rename_2.setText("Playlist already exists!")
             self.warningLabel_rename_2.show()
         else:
             self.renameBox_2.hide()
             new_path = directory_path / new_name
             try:
-                shutil.move(self.old_playlist_name,new_path)
+                shutil.move(self.old_playlist_name, new_path)
             except PermissionError:
                 self.music_close()
-                shutil.move(self.old_playlist_name, new_path)
-        self.update_playlist()
-        self.playlistName.setText(f"    new_name")
+                for file in self.old_playlist_name.glob("*.mp3"):
+                    file.unlink()
+                self.old_playlist_name.rmdir()
+                self.current_path = new_path
+                self.playlistName.setText(f"    {new_name}")
+            self.update_playlist()
 
     def rename_apply(self):
         new_name = self.newName.text()
-        if new_name == "" or new_name.isspace():
+        if new_name == "" or new_name.isspace() or pattern.search(new_name):
             self.warningLabel_rename.show()
         else:
             self.renameBox.hide()
@@ -321,22 +367,40 @@ class MainWindow(QMainWindow):
                                                           daemon=True)
         self.youtube_mp3_playlist_only.start()
 
-    def youtube_download_preaction_playlist_also(self):
-        self.youtube_mp3_playlist_also = threading.Thread(target=self.youtube_download_action_playlist_also, args=(),
-                                                          daemon=True)
+    def youtube_download_playlist_also_ask_name_handler(self):
+        self.ytbName.show()
+        self.linkFrame.hide()
+
+    def youtube_download_playlist_also_ask_name_cancel(self):
+        self.ytbName.hide()
+        self.linkFrame.show()
+
+    def youtube_download_playlist_also_ask_name_apply(self):
+        name = clean(self.youTubePlaylistName.text())
+        playlist_list = [file.name for file in directory_path.glob("*/") if file.is_dir()]
+        if name in playlist_list:
+            self.warningLabel_3.show()
+        else:
+            self.youtube_download_preaction_playlist_also(name)
+            self.ytbName.hide()
+            self.linkFrame.show()
+
+    def youtube_download_preaction_playlist_also(self, name):
+        self.youtube_mp3_playlist_also = threading.Thread(target=self.youtube_download_action_playlist_also,
+                                                          args=(name,),daemon=True)
         self.youtube_mp3_playlist_also.start()
 
     def youtube_download_action(self):
         try:
+            link = self.youTubeLink.text()
             self.downloadFeedback.setFont(QFont('Segue UI', 11))
             self.downloadFeedback.setText("Downloading...\nPlease wait.")
             self.warningLabel_2.hide()
             self.downloadFeedback.show()
             self.cancelButton_2.hide()
             self.downloadButton.hide()
-            link = self.youTubeLink.text()
             yt = YouTube(link)
-            name = yt.title
+            name = clean(yt.title)
             stream = yt.streams.filter(only_audio=True).get_by_itag(251)
             stream.download(output_path=directory_path_all, filename="prototype.webm")
             file_path = directory_path_all / "prototype.webm"
@@ -374,7 +438,7 @@ class MainWindow(QMainWindow):
         self.downloadFeedback.setText("Downloading...\nThis might take a few minutes.")
         pl = Playlist(self.link)
         for video in pl.videos:
-            name = video.title
+            name = clean(video.title)
             stream = video.streams.filter(only_audio=True).get_by_itag(251)
             stream.download(output_path=directory_path_all, filename="prototype.webm")
             file_path = directory_path_all / "prototype.webm"
@@ -386,15 +450,17 @@ class MainWindow(QMainWindow):
         else:
             self.customSignal_2.setText("A")
 
-    def youtube_download_action_playlist_also(self):
+    def youtube_download_action_playlist_also(self, playlist_name):
         self.youTubePlaylist.hide()
         self.downloadFeedback.setText("Downloading...\nThis might take a few minutes.")
         pl = Playlist(self.link)
-        name_playlist = pl.title
+        if playlist_name.isspace() or playlist_name == "":
+            playlist_name = clean(pl.title)
+        name_playlist = playlist_name
         new_playlist_path = directory_path / name_playlist
-        new_playlist_path.mkdir()
+        new_playlist_path.mkdir(parents=True, exist_ok=True)
         for video in pl.videos:
-            name = video.title
+            name = clean(video.title)
             stream = video.streams.filter(only_audio=True).get_by_itag(251)
             stream.download(output_path=directory_path_all, filename="prototype.webm")
             file_path = directory_path_all / "prototype.webm"
@@ -479,8 +545,13 @@ class MainWindow(QMainWindow):
         self.askPlaylist.hide()
 
     def create_playlist(self):
-        name = self.lineEdit.text()
-        if name.isspace() or name == "":
+        playlist_list = [file.name for file in directory_path.glob("*/") if file.is_dir()]
+        name = clean(self.lineEdit.text())
+        if name == "" or name.isspace():
+            self.warningLabel.setText("Invalid Name!")
+            self.warningLabel.show()
+        elif name in playlist_list:
+            self.warningLabel.setText("Playlist already exists!")
             self.warningLabel.show()
         else:
             self.warningLabel.hide()
@@ -672,7 +743,6 @@ class MainWindow(QMainWindow):
             self.current_path = path
             self.update_music_list()
             self.playlistName.setText(f"    {path.name}")
-
         return handler2
 
     def update_playlist(self):
@@ -758,9 +828,9 @@ class MainWindow(QMainWindow):
             self.current_piece = x
             name = x.name[:-4]
             self.songName.setText(name)
-            self.total_length = int(TinyTag.get(x).duration)
+            self.total_length = TinyTag.get(x).duration*10
             self.remaining = TinyTag.get(x).duration
-            self.horizontalSlider.setMaximum(int(self.remaining))
+            self.horizontalSlider.setMaximum(int(self.remaining*10))
             mixer.music.load(x)
             self.musicSlide.show()
             mixer.music.play(start=start_time)
@@ -785,49 +855,73 @@ class MainWindow(QMainWindow):
         while not self.exit_flag:
             if length <= 0:
                 break
-            remaining = turn_into_clock(duration_millisecond - length)
             length = length - 0.2
-            slider_position = int(self.total_length - length)
+            remaining = turn_into_clock(duration_millisecond - length)
+            slider_position = int(self.total_length - length*10)
             self.horizontalSlider.setValue(slider_position)
             self.label.setText(f"{remaining}/{duration}")
             time.sleep(0.2)
+            print(length)
         self.remaining = length
+        print(length)
         if length <= 0 and self.mode_flag != 0:
+            self.label.setText(f"{duration}/{duration}")
             if self.customSignal.text() == "a":
                 self.customSignal.setText("b")
             else:
                 self.customSignal.setText("a")
 
+    def list_for_mode(self):
+        pieces = self.current_path_for_mode.glob("*.mp3")
+        mp3list = []
+        for file in pieces:
+            mp3list.append(file)
+        return mp3list
+
     def mode_apply(self):
         if self.mode_flag == 1:
             self.music_open(self.current_piece)
         elif self.mode_flag == 2:
-            pieces = self.current_path_for_mode.glob("*.mp3")
-            mp3list = []
-            for file in pieces:
-                mp3list.append(file)
+            mp3list = self.list_for_mode()
             where = mp3list.index(self.current_piece)
-            try:
-                self.music_open(mp3list[where + 1])
-            except IndexError:
-                self.music_open(mp3list[0])
+            if not self.back_flag:
+                try:
+                    self.music_open(mp3list[where + 1])
+                except IndexError:
+                    self.music_open(mp3list[0])
+            else:
+                try:
+                    self.music_open(mp3list[where - 1])
+                except IndexError:
+                    self.music_open(mp3list[-1])
         elif self.mode_flag == 3:
             where = self.randomized_list.index(self.current_piece)
             try:
-                try:
-                    mixer.music.load(self.randomized_list[where + 1])
-                except IndexError:
-                    mixer.music.load(self.randomized_list[0])
-                try:
-                    self.music_open(self.randomized_list[where + 1])
-                except IndexError:
-                    self.music_open(self.randomized_list[0])
+                if not self.back_flag:
+                    try:
+                        file = self.randomized_list[where + 1]
+                    except IndexError:
+                        file = self.randomized_list[0]
+                else:
+                    try:
+                        file = self.randomized_list[where - 1]
+                    except IndexError:
+                        file = self.randomized_list[-1]
+                mixer.music.load(file)
+                self.music_open(file)
             except pygame.error:
-                try:
-                    self.music_open(self.randomized_list[where + 2])
-                except IndexError:
-                    self.music_open(self.randomized_list[0])
+                self.randomized_list.remove(file)
+                if len(self.randomized_list) != 0:
+                    self.mode_apply()
+                else:
+                    not_random_list = self.list_for_mode()
+                    random.shuffle(not_random_list)
+                    self.randomized_list = not_random_list
+                    self.mode_apply()
 
+# The reason I load before music_open on the function on top is to check for pygame.error
+# randomized_list is prepared when random mode is selected, not when mode_apply runs. So if there is a file change this
+# will detect and skip that.
     def music_close(self):
         self.exit_flag = True
         try:
@@ -882,7 +976,7 @@ class MainWindow(QMainWindow):
     def slider_timer_show(self):
         while self.slider_timer:
             time.sleep(0.01)
-            self.current_value = int(self.horizontalSlider.value())
+            self.current_value = int(self.horizontalSlider.value())/10
             duration = turn_into_clock(TinyTag.get(self.current_piece).duration)
             remaining = turn_into_clock(self.current_value)
             self.label.setText(f"{remaining}/{duration}")
@@ -919,21 +1013,20 @@ class MainWindow(QMainWindow):
     def mode_set(self):
         if self.mode_flag == 0:
             self.modeChange.setStyleSheet("border-image: url(:/images/repeatsame.png)")
-            self.skip.show()
-            self.PlayPause.move(20,10)
         elif self.mode_flag == 1:
+            self.PlayPause.move(20, 10)
+            self.skip.show()
+            self.back.show()
             self.modeChange.setStyleSheet("border-image: url(:/images/repeatall.png)")
         elif self.mode_flag == 2:
             self.modeChange.setStyleSheet("border-image: url(:/images/shuffle.png)")
-            pieces = self.current_path_for_mode.glob("*.mp3")
-            mp3list = []
-            for file in pieces:
-                mp3list.append(file)
-                random.shuffle(mp3list)
-                self.randomized_list = mp3list
+            mp3list = self.list_for_mode()
+            random.shuffle(mp3list)
+            self.randomized_list = mp3list
         elif self.mode_flag == 3:
             self.modeChange.setStyleSheet("border-image: url(:/images/donothing.png)")
             self.skip.hide()
+            self.back.hide()
             self.PlayPause.move(60, 10)
 
         if not self.mode_flag == 3:
@@ -950,4 +1043,3 @@ try:
     sys.exit(app.exec())
 except SystemExit:
     mixer.quit()
-
